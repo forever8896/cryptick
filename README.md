@@ -1,4 +1,4 @@
-# Crypto Alerts Tauri App
+# CrypTick
 
 This is a Tauri application for receiving crypto price alerts, built with Svelte and Vite, Built from the create-tauri-app command. With the 7th chapter of the rust book read, I wanted to jump in and build something.
 
