@@ -13,7 +13,7 @@ This is a Tauri application for receiving crypto price alerts, built with Svelte
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/cryptick.git
+   git clone https://github.com/forever8896/cryptick.git
    cd cryptick
    ```
 
