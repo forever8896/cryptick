@@ -1,4 +1,5 @@
 # CrypTick
+![image](./cryptick.png)
 
 This is a Tauri application for receiving crypto price alerts, built with Svelte and Vite, created using the `create-tauri-app` command. After reading the 7th chapter of the Rust book, I wanted to jump in and build something.
 
