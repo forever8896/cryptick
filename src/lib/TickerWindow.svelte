@@ -5,6 +5,7 @@
   import { fade, fly, scale, slide } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import { cubicOut } from 'svelte/easing';
+  import { createEventDispatcher } from 'svelte';
 
   export let symbol;
   export let removeTicker;
@@ -18,6 +19,8 @@
   let duplicateAlertMessage = '';
 
   $: sortedAlerts = alerts.sort((a, b) => b.price - a.price);
+
+  const dispatch = createEventDispatcher();
 
   async function startWebSocket() {
     try {
@@ -88,8 +91,8 @@
 
     listen(`price-update-${symbol}`, (event) => {
       const newPrice = parseFloat(event.payload);
-      isPositive = newPrice >= price;
-      price = newPrice.toFixed(2);
+      isPositive = newPrice >= parseFloat(price);
+      price = formatPrice(newPrice);
     });
 
     listen(`alert-triggered-${symbol}`, (event) => {
@@ -126,6 +129,15 @@
 
   // Modify the functions that set alertMessage to use this new approach
   function setAlertMessage(message) {
+    if (message.includes('$')) {
+      const parts = message.split('$');
+      const prices = parts[1].split(',').map(p => {
+        const price = parseFloat(p);
+        return isNaN(price) ? p : formatPrice(price);
+      });
+      message = `${parts[0]}$${prices.join(',')}`;
+    }
+
     const newMessage = { id: Date.now(), text: message };
     alertMessages = [...alertMessages, newMessage];
     
@@ -143,6 +155,30 @@
         transform: translateY(${(1 - t) * 10}px);
       `
     };
+  }
+
+  function formatPrice(price) {
+    if (typeof price === 'string' && price === 'Loading') return price;
+    
+    const numPrice = parseFloat(price);
+    if (isNaN(numPrice)) return price;
+
+    // For prices under $1, show more decimal places
+    if (numPrice < 1) {
+      return numPrice.toFixed(6);
+    } 
+    // For prices under $100, show 4 decimal places
+    else if (numPrice < 100) {
+      return numPrice.toFixed(4);
+    }
+    // For prices $100 and above, show 2 decimal places
+    else {
+      return numPrice.toFixed(2);
+    }
+  }
+
+  function formatAlertPrice(price) {
+    return formatPrice(price);
   }
 </script>
 
@@ -187,7 +223,7 @@
               in:slide={{duration: 300}}
               out:slide={{duration: 300}}
             >
-              <span class="alert-price">${alert.price.toFixed(2)}</span>
+              <span class="alert-price">${formatAlertPrice(alert.price)}</span>
               <button class="remove-btn" on:click={() => removeAlert(alerts.indexOf(alert))}>×</button>
             </li>
           {/each}
@@ -225,6 +261,7 @@
     margin: 1rem;
     font-weight: 600;
     overflow: hidden;  /* Add this line to ensure content doesn't overflow */
+    user-select: none; /* Prevents text selection while dragging */
   }
 
   .header {

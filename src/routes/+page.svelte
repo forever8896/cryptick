@@ -3,24 +3,49 @@
   import { invoke } from "@tauri-apps/api/core";
   import TickerWindow from "$lib/TickerWindow.svelte";
   import { fade, fly } from 'svelte/transition';
+  import { spring } from 'svelte/motion';
+  import { flip } from 'svelte/animate';
 
   let tickers = [];
   let newSymbol = "";
   let showSettings = false;
   let showInfo = false;
   let selectedSound = "beep.mp3";
+  let availablePairs = [];
+  let filteredPairs = [];
+  let showSuggestions = false;
+  let toast = { show: false, message: '', type: 'error' };
+
+  function showToast(message, type = 'error') {
+    toast = { show: true, message, type };
+    setTimeout(() => {
+      toast = { show: false, message: '', type: 'error' };
+    }, 3000);
+  }
 
   async function addTicker() {
-    if (newSymbol && !tickers.includes(newSymbol.toUpperCase())) {
+    if (newSymbol) {
       const symbol = newSymbol.toUpperCase();
+      
+      if (tickers.includes(symbol)) {
+        showToast(`${symbol} is already being tracked`);
+        return;
+      }
+
+      if (!availablePairs.includes(symbol)) {
+        showToast(`${symbol} is not a valid trading pair`);
+        return;
+      }
+
       try {
         await invoke("start_websocket", { symbol });
         tickers = [...tickers, symbol];
         console.log("Added new ticker:", symbol);
         newSymbol = "";
-        await saveSettings(); // This now calls save_app_settings
+        await saveSettings();
       } catch (error) {
         console.error("Failed to add ticker:", error);
+        showToast(`Failed to add ${symbol}: ${error}`);
       }
     }
   }
@@ -30,19 +55,21 @@
       console.log("Loading app settings");
       const settings = await invoke("get_app_settings");
       console.log("Loaded settings:", settings);
+      
       tickers = settings.tickers.map(t => t.symbol);
+      console.log("Tickers array set to:", tickers);
+      
       selectedSound = settings.selected_sound;
-      console.log("Extracted symbols:", tickers);
+
       for (const { symbol, alerts, last_price } of settings.tickers) {
-        console.log(`Starting WebSocket for ${symbol}`);
+        console.log(`Starting websocket for ${symbol}`);
         await invoke("start_websocket", { symbol });
-        console.log(`Setting alerts for ${symbol}:`, alerts);
         await invoke("set_alerts", { symbol, alerts });
-        console.log(`Setting last price for ${symbol}:`, last_price);
         await invoke("set_last_price", { symbol, price: last_price });
       }
     } catch (error) {
       console.error("Failed to load settings:", error);
+      tickers = [];
     }
   }
 
@@ -62,7 +89,7 @@
       tickers = tickers.filter(symbol => symbol !== symbolToRemove);
       console.log(`Removed ticker: ${symbolToRemove}`);
       console.log("Remaining tickers:", tickers);
-      await saveSettings(); // This now calls save_app_settings
+      await saveSettings();
     } catch (error) {
       console.error(`Failed to remove ticker ${symbolToRemove}:`, error);
     }
@@ -95,9 +122,46 @@
     await invoke("play_alert_sound", { filename: selectedSound });
   }
 
+  async function fetchTradingPairs() {
+    try {
+      const response = await fetch('https://api.binance.com/api/v3/exchangeInfo');
+      const data = await response.json();
+      availablePairs = data.symbols
+        .filter(symbol => symbol.quoteAsset === 'USDT' && symbol.status === 'TRADING')
+        .map(symbol => symbol.symbol);
+      console.log('Loaded trading pairs:', availablePairs);
+    } catch (error) {
+      console.error('Failed to fetch trading pairs:', error);
+    }
+  }
+
+  function updateSuggestions() {
+    if (newSymbol.length > 0) {
+      filteredPairs = availablePairs
+        .filter(pair => pair.toLowerCase().includes(newSymbol.toLowerCase()))
+        .slice(0, 5); // Limit to 5 suggestions
+      showSuggestions = filteredPairs.length > 0;
+    } else {
+      showSuggestions = false;
+    }
+  }
+
+  function selectSuggestion(pair) {
+    newSymbol = pair;
+    showSuggestions = false;
+  }
+
+  $: {
+    console.log('Ticker state changed');
+    console.log('Tickers:', tickers);
+  }
+
   onMount(async () => {
     console.log("Component mounted, loading settings");
-    await loadSettings();
+    await Promise.all([
+      loadSettings(),
+      fetchTradingPairs()
+    ]);
   });
 </script>
 
@@ -132,11 +196,28 @@
       {/if}
       <div class="new-ticker-form">
         <div class="input-button-group">
-          <input
-            placeholder="e.g. BTCUSDT, ETHUSDT, etc."
-            bind:value={newSymbol}
-            type="text"
-          />
+          <div class="input-wrapper">
+            <input
+              placeholder="e.g. BTCUSDT, ETHUSDT, etc."
+              bind:value={newSymbol}
+              on:input={updateSuggestions}
+              on:focus={() => updateSuggestions()}
+              on:blur={() => setTimeout(() => showSuggestions = false, 200)}
+              type="text"
+            />
+            {#if showSuggestions}
+              <div class="suggestions" transition:fade="{{ duration: 100 }}">
+                {#each filteredPairs as pair}
+                  <div
+                    class="suggestion-item"
+                    on:mousedown={() => selectSuggestion(pair)}
+                  >
+                    {pair}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
           <button on:click={addTicker}><i class="fas fa-plus"></i> Add Ticker</button>
         </div>
        
@@ -175,14 +256,27 @@
 
   <main class="tickers-container-wrapper">
     <div class="tickers-container">
-      {#each tickers as symbol (symbol)}
-        <div in:fly="{{ y: 50, duration: 500 }}" out:fade="{{ duration: 300 }}">
-          <TickerWindow {symbol} {removeTicker} {selectedSound} />
-        </div>
-      {/each}
+      {#if tickers.length === 0}
+        <p class="no-tickers">No tickers added yet. Add a ticker above to get started.</p>
+      {:else}
+        {#each tickers as symbol (symbol)}
+          <div class="ticker-wrapper">
+            <TickerWindow {symbol} {removeTicker} {selectedSound} />
+          </div>
+        {/each}
+      {/if}
     </div>
   </main>
 </div>
+
+{#if toast.show}
+  <div 
+    class="toast {toast.type}"
+    transition:fade="{{ duration: 200 }}"
+  >
+    {toast.message}
+  </div>
+{/if}
 
 <style>
   :global(:root) {
@@ -388,9 +482,10 @@
 
   .tickers-container-wrapper {
     width: 100%;
-    height: 100%;
+    height: calc(100vh - 120px);
     overflow-x: auto;
     overflow-y: hidden;
+    padding: 1rem;
   }
 
   .tickers-container {
@@ -398,7 +493,8 @@
     flex-wrap: nowrap;
     gap: 1rem;
     padding: 0.5rem;
-    height: 100%;
+    min-height: min-content;
+    user-select: none; /* Prevent text selection during drag */
   }
 
   /* Custom scrollbar styles for Webkit browsers */
@@ -560,5 +656,109 @@
   /* Add this new style for TickerWindow component */
  
 
+  .input-wrapper {
+    position: relative;
+    flex-grow: 1;
+  }
+
+  .suggestions {
+    position: absolute;
+    top: calc(100% + 5px); /* Position it 5px below the input */
+    left: 0;
+    right: 0;
+    background-color: var(--primary-color);
+    border: 2px solid var(--accent-color);
+    border-radius: 0.25rem;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  }
+
+  .suggestion-item {
+    padding: 0.75rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border-bottom: 1px solid var(--secondary-color);
+  }
+
+  .suggestion-item:last-child {
+    border-bottom: none;
+  }
+
+  .suggestion-item:hover {
+    background-color: var(--secondary-color);
+    color: var(--accent-color);
+  }
+
+  /* Ensure the header has a consistent height */
+  .header-content {
+    min-height: 80px; /* Adjust this value based on your needs */
+  }
+
+  /* Update the new-ticker-form to maintain its position */
+  .new-ticker-form {
+    position: relative;
+    z-index: 1001; /* Ensure it's above other elements */
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--primary-color);
+    color: var(--text-color);
+    padding: 1rem 2rem;
+    border-radius: 0.5rem;
+    border: 2px solid var(--accent-color);
+    z-index: 2000;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .toast.error {
+    border-color: #ff4444;
+  }
+
+  .toast.success {
+    border-color: #00C851;
+  }
+
+  .ticker-wrapper {
+    height: fit-content;
+    cursor: grab;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    min-width: 250px;
+    touch-action: none;
+    position: relative;
+  }
+
+  .ticker-wrapper.dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+    z-index: 100;
+  }
+
+  .ticker-wrapper:active {
+    cursor: grabbing;
+  }
+
+  .no-tickers {
+    width: 100%;
+    text-align: center;
+    color: var(--text-color);
+    opacity: 0.7;
+    padding: 2rem;
+  }
+
+  .ticker-wrapper {
+    height: fit-content;
+    cursor: grab;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+    min-width: 250px;
+  }
 
 </style>

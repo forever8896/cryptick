@@ -43,12 +43,14 @@ struct TickerState {
 struct AppSettings {
     tickers: Vec<TickerState>,
     selected_sound: String,
+    ticker_order: Vec<String>,
 }
 
 struct AppState {
     tickers: HashMap<String, TickerState>,
     selected_sound: String,
     websocket_senders: HashMap<String, mpsc::Sender<()>>,
+    ticker_order: Vec<String>,
 }
 
 #[tauri::command]
@@ -275,8 +277,19 @@ async fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
     match fs::read_to_string(&settings_file) {
         Ok(contents) => {
             println!("Successfully read settings file. Contents: {}", contents);
-            let settings: AppSettings =
+            let mut settings: AppSettings =
                 serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+            
+            // Ensure ticker_order contains all tickers
+            let ticker_symbols: Vec<String> = settings.tickers.iter()
+                .map(|t| t.symbol.clone())
+                .collect();
+            
+            // If ticker_order is empty or doesn't match tickers, rebuild it
+            if settings.ticker_order.len() != ticker_symbols.len() {
+                settings.ticker_order = ticker_symbols;
+            }
+            
             println!("Parsed settings: {:?}", settings);
             Ok(settings)
         }
@@ -285,6 +298,7 @@ async fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
             Ok(AppSettings {
                 tickers: vec![],
                 selected_sound: "beep.mp3".to_string(),
+                ticker_order: Vec::new(),
             })
         }
     }
@@ -304,14 +318,13 @@ async fn save_app_settings(
         AppSettings {
             tickers: state_guard.tickers.values().cloned().collect(),
             selected_sound: state_guard.selected_sound.clone(),
+            ticker_order: state_guard.ticker_order.clone(),
         }
     };
 
     println!("Settings to save: {:?}", settings);
     let settings_json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-
-    println!("Settings JSON to save: {}", settings_json);
-
+    
     fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
     fs::write(&settings_file, settings_json).map_err(|e| e.to_string())?;
     println!("Settings saved successfully");
@@ -400,6 +413,19 @@ async fn set_selected_sound(
     save_app_settings(app, state).await
 }
 
+#[tauri::command]
+async fn update_ticker_order(
+    order: Vec<String>,
+    state: State<'_, Arc<Mutex<AppState>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    {
+        let mut state_guard = state.lock().unwrap();
+        state_guard.ticker_order = order;
+    }
+    save_app_settings(app, state).await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -408,6 +434,7 @@ fn main() {
             tickers: HashMap::new(),
             selected_sound: "beep.mp3".to_string(),
             websocket_senders: HashMap::new(),
+            ticker_order: Vec::new(),
         })))
         .setup(|app| {
             let app_handle = app.handle();
@@ -418,7 +445,8 @@ fn main() {
                 match get_app_settings(app_handle.clone()).await {
                     Ok(settings) => {
                         let mut state_guard = state.lock().unwrap();
-                        state_guard.selected_sound = settings.selected_sound;
+                        state_guard.selected_sound = settings.selected_sound.clone();
+                        state_guard.ticker_order = settings.ticker_order.clone();
                         drop(state_guard);
 
                         for ticker in settings.tickers {
@@ -459,7 +487,8 @@ fn main() {
             set_alerts,
             remove_ticker,
             set_last_price,
-            set_selected_sound // Add this line
+            set_selected_sound,
+            update_ticker_order
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
